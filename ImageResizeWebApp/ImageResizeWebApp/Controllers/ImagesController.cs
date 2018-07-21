@@ -14,6 +14,9 @@ using Microsoft.WindowsAzure.Storage.Auth;
 using System.Net.Http;
 using Microsoft.AspNetCore.Http;
 using ImageResizeWebApp.Helpers;
+using System.Net;
+using ImageMagick;
+using System.Net.Http.Headers;
 
 namespace ImageResizeWebApp.Controllers
 {
@@ -107,7 +110,6 @@ namespace ImageResizeWebApp.Controllers
                 List<string> thumbnailUrls = await StorageHelper.GetThumbNailUrls(storageConfig);
 
                 return new ObjectResult(thumbnailUrls);
-            
             }
             catch (Exception ex)
             {
@@ -116,5 +118,104 @@ namespace ImageResizeWebApp.Controllers
 
         }
 
+        private string IsURLExists(string url)
+        {
+            WebRequest webRequest = WebRequest.Create(url);
+            webRequest.Timeout = 1200; // miliseconds
+            webRequest.Method = "HEAD";
+
+            try
+            {
+                webRequest.GetResponse();
+            }
+            catch
+            {
+                return String.Format("{0}/{1}/{2}", storageConfig.StorageURL, storageConfig.ImageContainer, "small-material.png");
+            }
+
+            return url;
+        }
+
+        private MagickImage DownloadImageFromUrl(string imageUrl)
+        {
+            MagickImage image = null;
+
+            try
+            {
+                imageUrl = IsURLExists(imageUrl);
+
+                System.Net.HttpWebRequest webRequest = (System.Net.HttpWebRequest)System.Net.HttpWebRequest.Create(imageUrl);
+                webRequest.AllowWriteStreamBuffering = true;
+                webRequest.Timeout = 30000;
+
+                System.Net.WebResponse webResponse = webRequest.GetResponse();
+
+                System.IO.Stream stream = webResponse.GetResponseStream();
+
+                image = new MagickImage(stream);
+
+                webResponse.Close();
+            }
+            catch (Exception ex)
+            {
+                return null;
+            }
+
+            return image;
+        }
+
+        [HttpGet("GetMaterialImage/{materialCode}")]
+        public HttpResponseMessage GetMaterialImage(string materialCode)
+        {
+            string imageUrl = String.Format("{0}/{1}/{2}", storageConfig.StorageURL, storageConfig.ImageContainer, materialCode + ".jpeg");
+
+            MagickImage image = DownloadImageFromUrl(imageUrl);
+            HttpResponseMessage result = new HttpResponseMessage(HttpStatusCode.OK);
+
+            var ms = new MemoryStream();
+            result.Content = new StreamContent(ms);
+
+            if (image.Format == MagickFormat.Png)
+            {
+                image.Write(ms, MagickFormat.Png);
+                result.Content.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+            }
+            else if (image.Format == MagickFormat.Jpeg || image.Format == MagickFormat.Jpg)
+            {
+                image.Write(ms, MagickFormat.Jpeg);
+                result.Content.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+            }
+
+            result.Headers.AcceptRanges.Add("bytes");
+            result.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("render");
+            result.Content.Headers.ContentDisposition.FileName = image.FileName;
+            result.Content.Headers.ContentLength = ms.Length;
+
+            return result;
+
+        }
+
+        [HttpGet("GetImageFile/{materialCode}")]
+        public IActionResult GetImageFile(string materialCode)
+        {
+            string imageUrl = String.Format("{0}/{1}/{2}", storageConfig.StorageURL, storageConfig.ImageContainer, materialCode + ".jpeg");
+
+            MagickImage image = DownloadImageFromUrl(imageUrl);
+
+            var ms = new MemoryStream();
+            
+            if (image.Format == MagickFormat.Png)
+            {
+                image.Write(ms, MagickFormat.Png);
+                return File(ms.ToArray(), "image/png");
+            }
+            else if (image.Format == MagickFormat.Jpeg || image.Format == MagickFormat.Jpg)
+            {
+                image.Write(ms, MagickFormat.Jpeg);
+                return File(ms.ToArray(), "image/jpeg");
+            }
+            
+            return null;
+        }
     }
 }
